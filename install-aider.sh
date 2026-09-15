@@ -21,6 +21,10 @@
 #   individual tasks can be launched cleanly via systemd-run or timers
 #   without leaving a long-running process.
 #
+#   The API key is NEVER stored by this script.  It must be supplied via the
+#   environment variable GROQ_API_KEY (interactive shells) or via an
+#   EnvironmentFile (systemd).  See the companion setup-aider-key.sh helper.
+#
 # Usage:
 #   ./install-aider.sh [REPOSITORY_PATH]
 #
@@ -30,13 +34,13 @@
 #
 # Examples:
 #   ./install-aider.sh
-#   ./install-aider.sh ~/projects/my-app
+#   ./install-aider.sh \~/projects/my-app
 #   ./install-aider.sh /srv/repos/backend
 #
 # After installation typical non-interactive usage:
 #   aider-run --message-file /path/to/task.txt
 #   # or via systemd:
-#   systemctl --user start aider-task@/path/to/task.txt.service
+#   systemctl --user start "aider-task@$(systemd-escape --path /path/to/task.txt).service"
 #
 # Requirements:
 #   - Debian/Ubuntu-based system with sudo privileges
@@ -58,16 +62,8 @@ WRAPPER_BIN="$HOME/.local/bin/aider-run"
 SERVICE_NAME="aider-task@.service"
 DEFAULT_REPO="$PWD"
 
-# Temporary API key placeholder.
-# IMPORTANT: This is a temporary hard-coded value for testing only.
-# Replace it with a proper secret management solution (systemd credentials,
-# environment file with restricted permissions, password store, etc.) as soon
-# as the secrets infrastructure is activated.  Do not leave real keys in the
-# script or in version control.
-TEMP_API_KEY="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"
-
 # Default model: Groq Llama 3.3 70B (free-tier friendly, fast, reliable for testing).
-# Requires GROQ_API_KEY to be set.
+# Requires GROQ_API_KEY to be set in the environment (never hard-coded here).
 # See https://aider.chat/docs/llms/groq.html for guidance.
 DEFAULT_MODEL="groq/llama-3.3-70b-versatile"
 
@@ -169,7 +165,7 @@ create_wrapper() {
     die 4 "Failed to create directory: $bin_dir"
   fi
 
-  # Ensure ~/.local/bin is on PATH for future sessions (best-effort)
+  # Ensure \~/.local/bin is on PATH for future sessions (best-effort)
   if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
     warn "$bin_dir is not currently on PATH. Add it to your shell profile if needed."
   fi
@@ -179,6 +175,10 @@ create_wrapper() {
 # aider-run — thin wrapper around aider that defaults to non-interactive
 # task execution via --message-file and only enters interactive mode when
 # a TTY is present or --interactive is supplied.
+#
+# The API key is NEVER hard-coded.  GROQ_API_KEY must already be present
+# in the environment (export it, put it in \~/.bashrc, or load it via
+# systemd EnvironmentFile).
 set -euo pipefail
 
 AIDER_ENV="${HOME}/.aider-env"
@@ -186,10 +186,12 @@ AIDER_BIN="${AIDER_ENV}/bin/aider"
 DEFAULT_MODEL="groq/llama-3.3-70b-versatile"
 REPO_DIR="__REPO_DIR_PLACEHOLDER__"
 
-# Temporary API key (testing only).
-# IMPORTANT: Replace with a proper secret as soon as secrets infrastructure
-# is activated.  Do not commit real keys.
-export GROQ_API_KEY="${GROQ_API_KEY:-YOUR_TEMPORARY_FREE_TIER_API_KEY_HERE}"
+if [[ -z "${GROQ_API_KEY:-}" ]]; then
+  echo "ERROR: GROQ_API_KEY is not set in the environment." >&2
+  echo "       Export it, add it to \~/.bashrc, or use the setup-aider-key.sh helper." >&2
+  exit 1
+fi
+export GROQ_API_KEY
 
 if [ ! -x "$AIDER_BIN" ]; then
   echo "ERROR: aider binary not found at $AIDER_BIN" >&2
@@ -216,7 +218,6 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --model)
-      # allow override; collect for later
       EXTRA_ARGS+=("$1" "$2")
       shift 2
       ;;
@@ -256,7 +257,7 @@ else
 fi
 WRAPPER_EOF
 
-  # Inject the concrete repository path
+  # Inject the concrete repository path (absolute, already resolved)
   sed -i "s|__REPO_DIR_PLACEHOLDER__|${REPO_DIR}|g" "$WRAPPER_BIN"
 
   chmod 755 "$WRAPPER_BIN"
@@ -273,7 +274,8 @@ create_systemd_oneshot() {
   fi
 
   # Template unit: aider-task@/absolute/path/to/message.txt.service
-  # The instance name after @ is the message-file path (percent-encoded if needed).
+  # The instance name after @ is the message-file path.
+  # API key is loaded from a user-controlled EnvironmentFile (never embedded).
   cat > "$service_file" <<EOF
 [Unit]
 Description=Aider one-shot task (%i)
@@ -282,17 +284,12 @@ Documentation=man:aider(1)
 
 [Service]
 Type=oneshot
-# Working directory is the repository configured at install time.
 WorkingDirectory=$REPO_DIR
-# Environment for the free-tier Groq model.
-# TEMPORARY: The key below is a placeholder for testing only.
-# Replace with a proper secret (systemd credentials, EnvironmentFile with
-# 0600 permissions, etc.) once secrets management is activated.
 Environment=PATH=$AIDER_ENV/bin:/usr/bin:/bin
-Environment=GROQ_API_KEY=$TEMP_API_KEY
-# %i is the instance name = absolute path to the message file
+# Load GROQ_API_KEY from a file the user creates (mode 600 recommended).
+# Example:  echo 'GROQ_API_KEY=gsk_...' > \~/.config/aider/env && chmod 600 \~/.config/aider/env
+EnvironmentFile=-%h/.config/aider/env
 ExecStart=$WRAPPER_BIN --message-file %i
-# Ensure the process exits after the task; no restart.
 RemainAfterExit=no
 
 [Install]
@@ -303,8 +300,7 @@ EOF
     die 4 "systemctl daemon-reload failed."
   fi
 
-  # Do NOT enable or start anything permanently.  The unit is a template
-  # that is started on demand (or via timers) for each individual task.
+  # Do NOT enable or start anything permanently.
   log "Oneshot template installed.  It is NOT enabled as a permanent service."
   log "Example invocation:"
   log "  systemctl --user start 'aider-task@$(systemd-escape --path /path/to/task.txt).service'"
@@ -312,8 +308,8 @@ EOF
 
 # === MAIN ===
 main() {
-  if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-    sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'
+  if [ "\( {1:-}" = "-h" ] || [ " \){1:-}" = "--help" ]; then
+    sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
   fi
 
@@ -334,8 +330,12 @@ main() {
   log "Aider AI installed successfully."
   log "Repository:          $REPO_DIR"
   log "Wrapper:             $WRAPPER_BIN"
-  log "Default model:       $DEFAULT_MODEL  (free-tier friendly for testing)"
+  log "Default model:       $DEFAULT_MODEL"
   log "Systemd template:    $SERVICE_NAME  (oneshot – not permanently enabled)"
+  log ""
+  log "IMPORTANT: No API key is stored by this installer."
+  log "  • For interactive use:  export GROQ_API_KEY=...  (or use setup-aider-key.sh)"
+  log "  • For systemd:          place the key in \~/.config/aider/env (mode 600)"
   log ""
   log "Non-interactive usage (default):"
   log "  $WRAPPER_BIN --message-file /path/to/task-prompt.txt"
@@ -343,11 +343,6 @@ main() {
   log "Interactive usage:"
   log "  $WRAPPER_BIN --interactive"
   log "  # or simply run from a TTY without --message-file"
-  log ""
-  log "NOTE on API key:"
-  log "  A temporary placeholder key is embedded for testing only."
-  log "  Replace it with a real secret management solution before production use."
-  log "  Set GROQ_API_KEY in the environment or edit the wrapper/unit."
 }
 
 main "$@"
