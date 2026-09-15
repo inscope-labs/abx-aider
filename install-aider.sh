@@ -64,12 +64,12 @@ DEFAULT_REPO="$PWD"
 # environment file with restricted permissions, password store, etc.) as soon
 # as the secrets infrastructure is activated.  Do not leave real keys in the
 # script or in version control.
-TEMP_API_KEY="YOUR_TEMPORARY_FREE_TIER_API_KEY_HERE"
+TEMP_API_KEY="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"
 
-# Default model: Google Gemini Flash (free-tier friendly, reliable for testing).
-# Requires GEMINI_API_KEY (or GOOGLE_API_KEY) to be set.
-# See https://aider.chat/docs/llms.html for free-model guidance.
-DEFAULT_MODEL="gemini/gemini-2.5-flash"
+# Default model: Groq Llama 3.3 70B (free-tier friendly, fast, reliable for testing).
+# Requires GROQ_API_KEY to be set.
+# See https://aider.chat/docs/llms/groq.html for guidance.
+DEFAULT_MODEL="groq/llama-3.3-70b-versatile"
 
 # === HELPERS ===
 log()  { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
@@ -183,15 +183,13 @@ set -euo pipefail
 
 AIDER_ENV="${HOME}/.aider-env"
 AIDER_BIN="${AIDER_ENV}/bin/aider"
-DEFAULT_MODEL="gemini/gemini-2.5-flash"
+DEFAULT_MODEL="groq/llama-3.3-70b-versatile"
 REPO_DIR="__REPO_DIR_PLACEHOLDER__"
 
 # Temporary API key (testing only).
 # IMPORTANT: Replace with a proper secret as soon as secrets infrastructure
 # is activated.  Do not commit real keys.
-export GEMINI_API_KEY="${GEMINI_API_KEY:-YOUR_TEMPORARY_FREE_TIER_API_KEY_HERE}"
-# Also accept the common alternative name
-export GOOGLE_API_KEY="${GOOGLE_API_KEY:-$GEMINI_API_KEY}"
+export GROQ_API_KEY="${GROQ_API_KEY:-YOUR_TEMPORARY_FREE_TIER_API_KEY_HERE}"
 
 if [ ! -x "$AIDER_BIN" ]; then
   echo "ERROR: aider binary not found at $AIDER_BIN" >&2
@@ -286,13 +284,12 @@ Documentation=man:aider(1)
 Type=oneshot
 # Working directory is the repository configured at install time.
 WorkingDirectory=$REPO_DIR
-# Environment for the free-tier Gemini model.
+# Environment for the free-tier Groq model.
 # TEMPORARY: The key below is a placeholder for testing only.
 # Replace with a proper secret (systemd credentials, EnvironmentFile with
 # 0600 permissions, etc.) once secrets management is activated.
 Environment=PATH=$AIDER_ENV/bin:/usr/bin:/bin
-Environment=GEMINI_API_KEY=$TEMP_API_KEY
-Environment=GOOGLE_API_KEY=$TEMP_API_KEY
+Environment=GROQ_API_KEY=$TEMP_API_KEY
 # %i is the instance name = absolute path to the message file
 ExecStart=$WRAPPER_BIN --message-file %i
 # Ensure the process exits after the task; no restart.
@@ -350,7 +347,7 @@ main() {
   log "NOTE on API key:"
   log "  A temporary placeholder key is embedded for testing only."
   log "  Replace it with a real secret management solution before production use."
-  log "  Set GEMINI_API_KEY (or GOOGLE_API_KEY) in the environment or edit the wrapper/unit."
+  log "  Set GROQ_API_KEY in the environment or edit the wrapper/unit."
 }
 
 main "$@"
